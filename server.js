@@ -1,26 +1,70 @@
 const express = require('express');
 const dotenv = require('dotenv');
+const https = require('https');
 
 dotenv.config();
 
 const app = express();
 app.use(express.json());
 
-// LOG DE TODAS AS REQUISIÇÕES
-app.use((req, res, next) => {
-  console.log(`[${new Date().toISOString()}] ${req.method} ${req.path}`);
-  console.log('Body:', JSON.stringify(req.body, null, 2));
-  next();
+const ZAVU_API_KEY = process.env.ZAVU_API_KEY;
+
+app.post('/webhook/zavu', async (req, res) => {
+  try {
+    console.log('✅ WEBHOOK RECEBIDO!');
+    const { from, text } = req.body;
+    console.log(`Mensagem de ${from}: ${text}`);
+
+    // Enviar resposta
+    const resposta = text.toLowerCase().includes('olá') 
+      ? '👋 Olá! Bem-vindo ao bot!' 
+      : '✅ Mensagem recebida!';
+
+    await enviarMensagem(from, resposta);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Erro:', error.message);
+    res.status(500).json({ error: error.message });
+  }
 });
 
-// Webhook para receber mensagens
-app.post('/webhook/zavu', (req, res) => {
-  console.log('✅ WEBHOOK RECEBIDO!');
-  console.log(JSON.stringify(req.body, null, 2));
-  res.json({ success: true });
-});
+async function enviarMensagem(numero, texto) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify({
+      to: numero,
+      text: texto
+    });
 
-// API: Status
+    const options = {
+      hostname: 'api.zavu.dev',
+      path: '/api/v1/messages/send',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${ZAVU_API_KEY}`,
+        'Content-Type': 'application/json',
+        'Content-Length': data.length
+      }
+    };
+
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => { data += chunk; });
+      res.on('end', () => {
+        console.log('Resposta enviada:', data);
+        resolve(data);
+      });
+    });
+
+    req.on('error', (error) => {
+      console.error('Erro ao enviar:', error);
+      reject(error);
+    });
+
+    req.write(data);
+    req.end();
+  });
+}
+
 app.get('/api/status', (req, res) => {
   res.json({ status: '✅ Online', bot: 'Assist EMT' });
 });
@@ -28,5 +72,4 @@ app.get('/api/status', (req, res) => {
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
   console.log(`✅ Bot rodando na porta ${PORT}`);
-  console.log(`Webhook URL: https://assist-emt-zavu-bot-production.up.railway.app/webhook/zavu`);
 });
