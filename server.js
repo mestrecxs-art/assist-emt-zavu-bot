@@ -1,159 +1,155 @@
-import express from 'express';
-import cors from 'cors';
-import bodyParser from 'body-parser';
-import dotenv from 'dotenv';
-import Zavu from '@zavudev/sdk';
+const express = require('express');
+const cors = require('cors');
+const dotenv = require('dotenv');
 
 dotenv.config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-
 app.use(cors());
-app.use(bodyParser.json());
+app.use(express.json());
 
-const zavu = new Zavu({
-  apiKey: process.env.ZAVU_API_KEY
-});
+// Armazenar conversas em memória
+const conversas = {};
 
-const conversas = new Map();
-
-// WEBHOOK - Receber mensagens do Zavu
+// Webhook para receber mensagens do Zavu
 app.post('/webhook/zavu', async (req, res) => {
   try {
-    const { id, from, text, timestamp, channel } = req.body;
-
-    console.log(`📨 Mensagem recebida de ${from}: ${text}`);
-
-    if (!conversas.has(from)) {
-      conversas.set(from, []);
+    console.log('Webhook recebido:', req.body);
+    
+    const { from, text } = req.body;
+    
+    if (!from || !text) {
+      return res.json({ success: false, message: 'Dados incompletos' });
     }
-    conversas.get(from).push({
+
+    // Guardar conversa
+    if (!conversas[from]) {
+      conversas[from] = [];
+    }
+    
+    conversas[from].push({
       remetente: 'usuario',
       mensagem: text,
-      timestamp: timestamp
+      timestamp: new Date()
     });
 
-    const resposta = await gerarResposta(text, from);
+    // Gerar resposta
+    const resposta = gerarResposta(text);
+    
+    // Enviar resposta de volta
+    const axios = require('axios');
+    await axios.post(
+      'https://api.zavu.dev/api/v1/messages/send',
+      {
+        to: from,
+        text: resposta
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.ZAVU_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
 
-    await zavu.messages.send({
-      to: from,
-      channel: 'whatsapp',
-      text: resposta
-    });
-
-    console.log(`✅ Resposta enviada para ${from}: ${resposta}`);
-
-    conversas.get(from).push({
+    // Guardar resposta do bot
+    conversas[from].push({
       remetente: 'bot',
       mensagem: resposta,
-      timestamp: new Date().toISOString()
+      timestamp: new Date()
     });
 
-    res.json({ success: true, messageId: id });
+    res.json({ success: true });
   } catch (error) {
-    console.error('❌ Erro ao processar webhook:', error);
+    console.error('Erro:', error.message);
     res.status(500).json({ error: error.message });
   }
 });
 
-async function gerarResposta(mensagem, numeroUsuario) {
-  const textoLower = mensagem.toLowerCase();
-
-  if (textoLower.includes('oi') || textoLower.includes('olá')) {
-    return 'Olá! 👋 Bem-vindo ao Assist EMT. Como posso ajudá-lo?';
-  }
-
-  if (textoLower.includes('ajuda') || textoLower.includes('help')) {
-    return `📋 Opções disponíveis:\n1️⃣ Informações gerais\n2️⃣ Agendamento\n3️⃣ Suporte técnico\n4️⃣ Falar com um atendente\n\nDigite o número da opção desejada.`;
-  }
-
-  if (textoLower.includes('1')) {
-    return 'ℹ️ Somos a Assist EMT, especializada em soluções de emergência médica e transporte.';
-  }
-
-  if (textoLower.includes('2')) {
-    return '📅 Para agendar um serviço, por favor informe a data e local desejado.';
-  }
-
-  if (textoLower.includes('3')) {
-    return '🔧 Para suporte técnico, descreva seu problema e faremos o possível para resolver.';
-  }
-
-  if (textoLower.includes('4')) {
-    return '👤 Um atendente entrará em contato em breve. Aguarde...';
-  }
-
-  return '👍 Recebi sua mensagem! Um dos nossos atendentes responderá em breve.';
-}
-
-// ENDPOINTS - API
+// API: Status
 app.get('/api/status', (req, res) => {
   res.json({
     status: '✅ Online',
     servico: 'Assist EMT Bot',
     plataforma: 'Zavu WhatsApp API',
-    conversas_ativas: conversas.size,
-    timestamp: new Date().toISOString()
+    conversas_ativas: Object.keys(conversas).length
   });
 });
 
-app.get('/api/conversas/:numero', (req, res) => {
-  const { numero } = req.params;
-  const conversa = conversas.get(numero);
-
-  if (!conversa) {
-    return res.status(404).json({ error: 'Conversa não encontrada' });
-  }
-
-  res.json({
-    numero,
-    mensagens: conversa,
-    total: conversa.length
-  });
-});
-
+// API: Conversas
 app.get('/api/conversas', (req, res) => {
-  const todasConversas = {};
-  conversas.forEach((mensagens, numero) => {
-    todasConversas[numero] = mensagens;
-  });
-
   res.json({
-    total_conversas: conversas.size,
-    conversas: todasConversas
+    total_conversas: Object.keys(conversas).length,
+    conversas: conversas
   });
 });
 
+// API: Conversa específica
+app.get('/api/conversas/:numero', (req, res) => {
+  const numero = req.params.numero;
+  const conversa = conversas[numero] || [];
+  res.json({ numero, mensagens: conversa });
+});
+
+// API: Enviar mensagem manual
 app.post('/api/enviar', async (req, res) => {
   try {
     const { numero, mensagem } = req.body;
+    const axios = require('axios');
 
-    if (!numero || !mensagem) {
-      return res.status(400).json({ error: 'Número e mensagem são obrigatórios' });
-    }
+    await axios.post(
+      'https://api.zavu.dev/api/v1/messages/send',
+      {
+        to: numero,
+        text: mensagem
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${process.env.ZAVU_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
 
-    await zavu.messages.send({
-      to: numero,
-      channel: 'whatsapp',
-      text: mensagem
+    if (!conversas[numero]) conversas[numero] = [];
+    conversas[numero].push({
+      remetente: 'bot',
+      mensagem: mensagem,
+      timestamp: new Date()
     });
 
-    console.log(`✅ Mensagem enviada para ${numero}`);
-    res.json({ success: true, numero, mensagem });
+    res.json({ success: true, message: 'Mensagem enviada' });
   } catch (error) {
-    console.error('❌ Erro ao enviar mensagem:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
+function gerarResposta(mensagem) {
+  const texto = mensagem.toLowerCase();
+
+  if (texto.includes('oi') || texto.includes('olá')) {
+    return '👋 Olá! Bem-vindo ao Assist EMT. Como posso ajudá-lo?';
+  }
+  if (texto.includes('ajuda')) {
+    return '📋 Opções:\n1️⃣ Informações\n2️⃣ Agendamento\n3️⃣ Suporte\n4️⃣ Atendente';
+  }
+  if (texto === '1') {
+    return 'ℹ️ Somos especializados em atendimento de emergências médicas 24/7.';
+  }
+  if (texto === '2') {
+    return '📅 Para agendar, envie sua disponibilidade.';
+  }
+  if (texto === '3') {
+    return '🛠️ Estou aqui para ajudar. Qual é o seu problema?';
+  }
+  if (texto === '4') {
+    return '👤 Conectando com um atendente...';
+  }
+  
+  return '✅ Mensagem recebida! Responderemos em breve.';
+}
+
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`
-╔════════════════════════════════════════╗
-║  🤖 ASSIST EMT BOT - ZAVU API         ║
-║  ✅ Servidor rodando na porta ${PORT}       ║
-║  📱 Webhook: /webhook/zavu            ║
-║  🔗 API: /api/*                        ║
-╚════════════════════════════════════════╝
-  `);
+  console.log(`✅ Bot rodando na porta ${PORT}`);
 });
