@@ -3,14 +3,18 @@ const dotenv = require('dotenv');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const axios = require('axios');
+const fs = require('fs');
+const path = require('path');
 const { default: makeWASocket, useMultiFileAuthState } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const QRCode = require('qrcode');
 
 dotenv.config();
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
+app.use(express.static('public'));
 
 // Armazenar conversas
 const conversas = {};
@@ -21,6 +25,7 @@ const logger = pino({ level: 'error' });
 // Inicializar Baileys
 let sock = null;
 let isConnected = false;
+let latestQR = null;
 
 async function connectWhatsApp() {
   try {
@@ -39,16 +44,36 @@ async function connectWhatsApp() {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
-        console.log('📱 QR CODE GERADO! Escaneie com seu WhatsApp:');
-        console.log(qr);
-        // Salvar QR code em base64 para acesso via API
-        global.qrCode = qr;
+        console.log('📱 QR CODE GERADO! Salvando em arquivo...');
+        latestQR = qr;
+        
+        try {
+          // Criar diretório public se não existir
+          if (!fs.existsSync('public')) {
+            fs.mkdirSync('public', { recursive: true });
+          }
+          
+          // Salvar QR Code como PNG
+          const qrPath = path.join('public', 'qrcode.png');
+          await QRCode.toFile(qrPath, qr, {
+            errorCorrectionLevel: 'H',
+            type: 'image/png',
+            quality: 0.95,
+            margin: 1,
+            width: 300
+          });
+          
+          console.log('✅ QR Code salvo em: /qrcode.png');
+          console.log('📱 Acesse: https://seashell-pheasant-870587.hostingsite.com/qrcode.png');
+        } catch (err) {
+          console.error('❌ Erro ao salvar QR Code:', err.message);
+        }
       }
 
       if (connection === 'open') {
         console.log('✅ WhatsApp conectado com Baileys!');
         isConnected = true;
-        global.qrCode = null; // Limpar QR após conexão bem-sucedida
+        latestQR = null; // Limpar QR após conexão bem-sucedida
       } else if (connection === 'close') {
         console.log('❌ WhatsApp desconectado');
         isConnected = false;
@@ -145,7 +170,11 @@ app.get('/api/status', (req, res) => {
     servico: 'Assist EMT Bot',
     plataforma: 'WhatsApp (Baileys)',
     conversas_ativas: Object.keys(conversas).length,
-    conectado: isConnected
+    conectado: isConnected,
+    qrCode: {
+      disponivel: latestQR ? true : false,
+      url: '/qrcode.png'
+    }
   });
 });
 
@@ -190,12 +219,13 @@ app.get('/health', (req, res) => {
   res.json({ status: 'OK', connected: isConnected });
 });
 
-// QR Code endpoint
+// QR Code endpoint (retorna JSON com informações)
 app.get('/api/qr', (req, res) => {
-  if (global.qrCode) {
+  if (latestQR) {
     res.json({
-      qr: global.qrCode,
-      status: 'QR Code gerado - escaneie com seu WhatsApp'
+      qr: latestQR,
+      status: 'QR Code gerado - acesse /qrcode.png para a imagem',
+      imageUrl: '/qrcode.png'
     });
   } else if (isConnected) {
     res.json({
